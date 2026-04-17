@@ -1,0 +1,27 @@
+/* main.css - 全局基础样式重置文件 */
+
+/* 清除默认外边距和内边距，确保各浏览器表现一致 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* 设置 html 和 body 高度为 100%，方便全屏布局 */
+html, body {
+  height: 100%;
+}
+
+/* 隐藏未定义滚动条时的溢出内容，避免出现双滚动条 */
+html {
+  overflow: hidden;
+}
+
+body {
+  /* 使用系统默认字体栈，确保跨平台可读性 */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  /* 内容高度至少占满整个视口 */
+  min-height: 100vh;
+  overflow-y: auto;
+}

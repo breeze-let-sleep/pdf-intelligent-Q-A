@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: RAG_Practice
+  ai:
+    deepseek:
+      api-key: ${DS_API_KEY} # 获取 DeepSeek API Key
+      chat:
+        options:
+          model: deepseek-chat # 模型名称，默认为 deepseek-chat，可以不配
+      base-url: https://api.deepseek.com/v1
+    dashscope:
+      # base-url:不注释报404
+      #      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api-key: ${QWEN_API_KEY}  # 阿里云百炼API Key
+      embedding:
+        options:
+          model: text-embedding-v4
+          # 向量维度：text-embedding-v4默认1024
+      #          dimensions: 2048
+  # 设置pdf文件最大上传大小
+  servlet:
+    multipart:
+      max-file-size: 30MB
+      max-request-size: 40MB
+logging:
+  level:
+    #查看Rag查到的内容以及给大模型传递的内容
+    org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: debug
