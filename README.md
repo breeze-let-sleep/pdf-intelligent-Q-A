@@ -200,8 +200,8 @@ public ChatClient pdfChatClient(DeepSeekChatModel model, ChatMemory chatMemory, 
 - **JDK 17+**
 - **Node.js 18+**
 - **Maven 3.8+**
-- DeepSeek API Key（[获取地址](https://platform.deepseek.com/)）
-- 阿里云百炼 API Key（[获取地址](https://dashscope.console.aliyun.com/)）
+- DeepSeek API Key（[获取地址](https://platform.deepseek.com/usage)）
+- 阿里云百炼 API Key（[获取地址](https://bailian.console.aliyun.com/)）
 
 ### 1. 启动后端
 
@@ -303,7 +303,8 @@ public Flux<String> chat(String prompt, String chatId) {
 
 ## 📊 项目截图
 
-> （请在发布前将截图放置在 docs/screenshots/ 目录下）
+![项目图片](./1.png)
+![项目图片](./2.png)
 
 ---
 
@@ -320,10 +321,10 @@ public Flux<String> chat(String prompt, String chatId) {
 ## 📚 参考资料
 
 - [Spring AI 官方文档](https://spring.io/projects/spring-ai)
-- [DeepSeek API 文档](https://platform.deepseek.com/docs)
-- [阿里云百炼 DashScope](https://help.aliyun.com/zh/dashscope/)
+- [DeepSeek API 文档](https://platform.deepseek.com/)
+- [阿里云百炼 DashScope](https://bailian.console.aliyun.com/)
 - [Vue 3 官方文档](https://vuejs.org/)
-- [Vite 构建工具](https://vitejs.dev/)
+- [大模型应用开发实践 基于Spring AI+DeepSeek实现 作者：赖帆]
 
 ---
 
