@@ -101,6 +101,7 @@
           <!-- 左侧：PDF 预览 -->
           <PDFViewer
             :file="pdfFile"
+            :fileUrl="pdfFileUrl"
             :fileName="currentPdfName"
           />
 
@@ -120,17 +121,30 @@
               <textarea
                 v-model="userInput"
                 @keydown.enter.prevent="sendMessage()"
-                placeholder="请输入您的问题..."
+                :placeholder="chatMode === 'rag'
+                  ? '基于文档内容回答'
+                  : '基于文档内容(若存在相关内容)与大模型联合回答'"
                 rows="1"
                 ref="inputRef"
               ></textarea>
-              <button
-                class="send-button"
-                @click="sendMessage()"
-                :disabled="isStreaming || !userInput.trim()"
-              >
-                <PaperAirplaneIcon class="icon" />
-              </button>
+              <div class="input-actions">
+                <!-- 对话模式下拉选择框 -->
+                <select
+                  v-model="chatMode"
+                  class="mode-select"
+                  title="选择对话模式"
+                >
+                  <option value="rag">RAG 模式</option>
+                  <option value="chat">对话模式</option>
+                </select>
+                <button
+                  class="send-button"
+                  @click="sendMessage()"
+                  :disabled="isStreaming || !userInput.trim()"
+                >
+                  <PaperAirplaneIcon class="icon" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -193,10 +207,14 @@ const uploadingFileName = ref('')
 const currentChatId = ref(null)
 const currentMessages = ref([])
 const currentPdfName = ref('')
-const pdfFile = ref(null)
+const pdfFile = ref(null)       // 上传场景：File 对象
+const pdfFileUrl = ref('')      // 历史记录场景：OSS URL
 
 // 历史记录
 const chatHistory = ref([])
+
+// 对话模式：'rag' = 基于文档回答，'chat' = 基于文档与大模型联合回答
+const chatMode = ref('rag')
 
 // 后端地址
 const BASE_URL = 'http://localhost:8080'
@@ -237,7 +255,11 @@ const loadChatHistory = async () => {
  * 流程：
  *   1. 清理当前状态
  *   2. 加载消息历史
- *   3. 从服务器下载 PDF 文件
+ *   3. 通过 OSS URL 获取 PDF 预览地址
+ *
+ * 注意：使用 OSS URL 直接预览时，需要确保 OSS 配置了正确的跨域头（CORS）
+ * 如果 OSS URL 直接访问会触发下载，说明 OSS 的 Content-Disposition 设置为 attachment
+ * 此时应联系后端调整 OSS 配置，或使用后端代理接口 /ai/pdf/file/{chatId}
  */
 const loadChat = async (chatId) => {
   if (!chatId) return
@@ -253,19 +275,23 @@ const loadChat = async (chatId) => {
       isMarkdown: msg.role === 'assistant'
     }))
 
-    // 从服务器获取 PDF
-    const file = await chatAPI.downloadPdf(chatId)
+    // 通过 /ai/pdf/info/{chatId} 接口获取文件信息
+    const fileInfo = await chatAPI.getFileInfo(chatId)
 
-    // 更新文件名
-    currentPdfName.value = file.name
+    // 设置 PDF 文件名
+    currentPdfName.value = fileInfo.fileName || fileInfo.title || 'document.pdf'
+
+    // 使用后端代理预览接口进行 PDF 预览
+    // 原因：OSS URL 直接访问时，如果 OSS 配置了 Content-Disposition: attachment 会触发下载
+    // 后端 /ai/pdf/preview/{chatId} 接口会代理 OSS 文件并设置 Content-Disposition: inline
+    // 确保浏览器在 iframe 中预览而非下载
+    pdfFileUrl.value = `${BASE_URL}/ai/pdf/preview/${chatId}`
 
     // 更新历史记录中的标题
     const chatIndex = chatHistory.value.findIndex(c => c.id === chatId)
     if (chatIndex !== -1) {
-      chatHistory.value[chatIndex].title = file.name
+      chatHistory.value[chatIndex].title = fileInfo.title || fileInfo.fileName
     }
-
-    pdfFile.value = file
 
   } catch (error) {
     console.error('加载失败:', error)
@@ -286,6 +312,7 @@ const cleanupResources = () => {
   currentPdfName.value = ''
   currentMessages.value = []
   pdfFile.value = null
+  pdfFileUrl.value = ''
   currentChatId.value = null
   isUploading.value = false
   uploadingFileName.value = ''
@@ -392,7 +419,7 @@ const handleDragLeave = (event) => {
  * @param {File} file - PDF 文件
  *
  * 接口: POST /ai/pdf/upload/{chatId}
- * 后端返回: { chatId }
+ * 后端返回: { ok: 1, data: "oss文件URL" }
  */
 const uploadFile = async (file) => {
   isUploading.value = true
@@ -417,9 +444,10 @@ const uploadFile = async (file) => {
     const data = await response.json()
 
     // 保存状态
-    currentChatId.value = data.chatId || uploadChatId
+    currentChatId.value = uploadChatId
     currentPdfName.value = file.name
-    pdfFile.value = file
+    pdfFile.value = file                // 上传场景使用 File 对象预览（Blob URL）
+    pdfFileUrl.value = ''               // 上传场景不需要 URL，使用 File 对象即可
 
     // 添加到历史记录
     const newChat = {
@@ -503,8 +531,8 @@ const sendMessage = async () => {
   try {
     isStreaming.value = true
 
-    // 发送请求获取流式读取器
-    const reader = await chatAPI.sendPdfMessage(input, currentChatId.value)
+    // 发送请求获取流式读取器，传入当前对话模式
+    const reader = await chatAPI.sendPdfMessage(input, currentChatId.value, chatMode.value)
     const decoder = new TextDecoder()
     let result = ''
 
@@ -879,6 +907,34 @@ const sendMessage = async () => {
           }
         }
 
+        .input-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+
+          .mode-select {
+            height: 2.5rem;
+            padding: 0 0.5rem;
+            border: 1px solid rgba(0, 0, 0, 0.15);
+            border-radius: 0.5rem;
+            background: white;
+            color: #333;
+            font-size: 0.875rem;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.2s;
+
+            &:hover {
+              border-color: #9333ea;
+            }
+
+            &:focus {
+              border-color: #9333ea;
+              box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.15);
+            }
+          }
+        }
+
         .send-button {
           background: #333;
           color: white;
@@ -999,6 +1055,19 @@ const sendMessage = async () => {
 
             &:disabled {
               background: rgba(30, 30, 30, 0.95);
+            }
+          }
+
+          .input-actions {
+            .mode-select {
+              background: rgba(50, 50, 50, 0.95);
+              border-color: rgba(255, 255, 255, 0.15);
+              color: white;
+
+              &:hover,
+              &:focus {
+                border-color: #9333ea;
+              }
             }
           }
         }

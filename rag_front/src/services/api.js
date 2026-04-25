@@ -14,21 +14,29 @@ const BASE_URL = 'http://localhost:8080'
  *   1. sendPdfMessage: 发送 PDF 问答消息（流式响应）
  *   2. getChatHistory: 获取对话历史列表
  *   3. getChatMessages: 获取指定对话的消息记录
+ *   4. getFileInfo: 获取会话对应的文件信息（OSS URL）
  */
 export const chatAPI = {
   /**
    * sendPdfMessage - 发送 PDF 问答消息
    * @param {string} prompt - 用户输入的问题
    * @param {string|null} chatId - 当前对话 ID（首次为 null，服务端自动生成）
+   * @param {string} mode - 对话模式：'rag' 或 'chat'
+   *   - 'rag': 基于文档内容回答，请求路径 /ai/pdf/chatRag
+   *   - 'chat': 基于文档与大模型联合回答，请求路径 /ai/pdf/chat
    * @returns {Promise<ReadableStreamDefaultReader>} 返回流式读取器，调用方自行消费
    *
-   * 接口: GET /ai/pdf/chat?prompt=xxx&chatId=xxx
+   * 接口: GET /ai/pdf/chatRag?prompt=xxx&chatId=xxx  (rag 模式)
+   *       GET /ai/pdf/chat?prompt=xxx&chatId=xxx     (chat 模式)
    * 后端返回 SSE/流式文本，逐步 yield 每个字符/词元
    */
-  async sendPdfMessage(prompt, chatId) {
+  async sendPdfMessage(prompt, chatId, mode = 'rag') {
     try {
+      // 根据对话模式选择请求路径
+      const endpoint = mode === 'rag' ? '/ai/pdf/chatRag' : '/ai/pdf/chat'
+
       // 构建 URL，可选追加 chatId 参数
-      const url = new URL(`${BASE_URL}/ai/pdf/chat`)
+      const url = new URL(`${BASE_URL}${endpoint}`)
       url.searchParams.append('prompt', prompt)
       if (chatId) {
         url.searchParams.append('chatId', chatId)
@@ -103,7 +111,33 @@ export const chatAPI = {
   },
 
   /**
-   * downloadPdf - 下载指定对话的 PDF 文件
+   * getFileInfo - 获取会话对应的文件信息
+   * @param {string} chatId - 对话 ID
+   * @returns {Promise<Object>} 文件信息 { url, fileName, title }
+   *
+   * 接口: GET /ai/pdf/info/{chatId}
+   * 后端返回 JSON: { url, fileName, title }
+   */
+  async getFileInfo(chatId) {
+    try {
+      const response = await fetch(`${BASE_URL}/ai/pdf/info/${chatId}`)
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      const result = await response.json()
+      if (result.ok === 1 && result.data) {
+        return result.data
+      }
+      throw new Error(result.msg || '获取文件信息失败')
+    } catch (error) {
+      console.error('API Error:', error)
+      throw error
+    }
+  },
+
+  /**
+   * downloadPdf - 下载指定对话的 PDF 文件（备用方法）
+   * 当 OSS URL 直接可用时，建议使用 getFileInfo 获取 URL 后直接预览
    * @param {string} chatId - 对话 ID
    * @returns {Promise<File>} PDF File 对象
    *

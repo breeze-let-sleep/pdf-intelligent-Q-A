@@ -13,6 +13,8 @@ public class MvcConfiguration implements WebMvcConfigurer {
                 .allowedOrigins("*")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
-                .exposedHeaders("Content-Disposition");
+                // 暴露 Content-Disposition 头，前端可以读取文件名
+                // 暴露 Content-Type 头，前端可以正确识别文件类型
+                .exposedHeaders("Content-Disposition", "Content-Type");
     }
 }

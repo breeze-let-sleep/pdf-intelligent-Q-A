@@ -1,0 +1,38 @@
+1. 创建数据库：rag
+2. 创建数据库表以及索引：
+``` SQL 
+
+create table if not exists file_type
+(
+    id   int auto_increment comment '主键ID'
+        primary key,
+    type varchar(50) not null comment '文件类型标识（如 pdf）',
+    constraint uk_type
+        unique (type)
+)
+    comment '文件类型表' collate = utf8mb4_unicode_ci;
+
+create table if not exists file_mapper
+(
+    id        int auto_increment comment '主键ID'
+        primary key,
+    type      int           not null comment '文件类型ID，外键关联file_type表的id字段',
+    chat_id   varchar(100)  not null comment '会话ID',
+    title     varchar(255)  null comment '会话标题',
+    file_name varchar(255)  null comment '原始文件名',
+    url       varchar(1024) null comment '文件访问路径（OSS URL）',
+    constraint fk_file_mapper_type
+        foreign key (type) references file_type (id)
+            on update cascade on delete cascade
+)
+    comment '文件映射表' collate = utf8mb4_unicode_ci;
+
+create index idx_chat_id
+    on file_mapper (chat_id);
+
+create index idx_type
+    on file_mapper (type);
+
+
+``` 
+3. 存储对话记录的数据表（spring_ai_chat_memory）会自动创建，无需手动创建

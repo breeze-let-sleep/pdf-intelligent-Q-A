@@ -17,12 +17,44 @@ spring:
           model: text-embedding-v4
           # 向量维度：text-embedding-v4默认1024
       #          dimensions: 2048
+  #配置jdbcRepository持久化的数据库自动建表
+  chat:
+    memory:
+      repository:
+        jdbc:
+          initialize-schema: always  #设置为自动建立数据表
+  #配置数据库连接信息
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/rag
+    username: root
+    password: 1234
+
   # 设置pdf文件最大上传大小
   servlet:
     multipart:
       max-file-size: 30MB
       max-request-size: 40MB
+
+# MyBatis 配置
+mybatis:
+  configuration:
+    # 开启驼峰命名：字段名（part_id）和属性名（partId）符合驼峰命名规则则自动映射
+    map-underscore-to-camel-case: true
+    # 往控制台打印执行sql语句的日志信息
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  # Mapper XML 文件路径
+  mapper-locations: classpath:mapper/*.xml
+
+# 日志配置
 logging:
   level:
-    #查看Rag查到的内容以及给大模型传递的内容
+    # 查看Rag查到的内容以及给大模型传递的内容
     org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: debug
+
+# 阿里云OSS的bucket配置信息
+aliyun:
+  oss:
+    endpoint: ${ENDPOINT}
+    bucketName: ${BUCKET_NAME}
+    region: ${REGION}

@@ -1,9 +1,11 @@
 package com.hyltest.rag_practice.service.impl;
 
+import com.hyltest.rag_practice.entity.mapper.FileMapperMapper;
+import com.hyltest.rag_practice.entity.po.FileMapper;
 import com.hyltest.rag_practice.repository.ChatHistoryRepository;
 import com.hyltest.rag_practice.service.IFileService;
+import com.hyltest.rag_practice.utils.AliyunOSSOperator;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -12,21 +14,20 @@ import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.time.LocalDateTime;
+import java.io.File;
+import java.io.InputStream;
+import java.net.URL;
 import java.util.List;
-import java.util.Objects;
-import java.util.Properties;
 
 /**
  * 文件服务实现类
- * 负责 PDF 文件的存储、向量化存储和检索
+ * 负责 PDF 文件的 OSS 存储、向量化存储和检索
+ * 使用纯 MyBatis Mapper 进行数据库操作，不依赖 MyBatis-Plus
  */
 @Slf4j
 @Service
@@ -34,20 +35,29 @@ import java.util.Properties;
 public class FileServiceImpl implements IFileService {
 
     /**
+     * 阿里云对象存储操作实例
+     */
+    private final AliyunOSSOperator aliyunOSSOperator;
+
+    /**
      * 向量存储实例
      */
     private final VectorStore vectorStore;
 
     /**
-     * 聊天历史仓储 - 用于记录已上传的会话
+     * 聊天历史仓储 - 用于记录已上传的会话和文件映射关系
      */
     private final ChatHistoryRepository chatHistoryRepository;
 
     /**
-     * 会话ID与文件名的映射关系
-     * 用于查询会话历史时重新加载文件
+     * 文件映射 Mapper（用于查询操作）
      */
-    private final Properties chatFiles = new Properties();
+    private final FileMapperMapper fileMapperMapper;
+
+    /**
+     * 向量数据持久化文件名
+     */
+    private static final String VECTOR_STORE_FILE = "chat-pdf.json";
 
     @Override
     public boolean save(String chatId, Resource resource) {
@@ -57,107 +67,109 @@ public class FileServiceImpl implements IFileService {
             return false;
         }
 
-        // 1. 保存到本地磁盘
-        File target = new File(filename);
-        if (!target.exists()) {
-            try {
-                Files.copy(resource.getInputStream(), target.toPath());
-                log.info("PDF 保存: {}", filename);
-            } catch (IOException e) {
-                log.error("PDF 资源保存失败.", e);
-                return false;
-            }
+        try {
+            // 1. 上传文件到阿里云 OSS，获取文件 URL
+            String fileUrl = aliyunOSSOperator.upload(
+                    resource.getInputStream().readAllBytes(),
+                    filename
+            );
+            log.info("文件已上传到 OSS: {}", fileUrl);
+
+            // 2. 一次性保存文件映射关系到 MySQL 数据库（file_mapper 表）
+            // chatHistoryRepository.save 内部会处理 file_mapper 表的插入/更新（含 URL）
+            chatHistoryRepository.save("pdf", chatId, filename, fileUrl);
+
+            // 3. 将 PDF 内容写入向量库（用于 RAG 检索）
+            writeToVectorStore(resource, chatId);
+
+            return true;
+        } catch (Exception e) {
+            log.error("保存文件失败", e);
+            throw new RuntimeException("保存文件失败", e);
         }
-
-        // 2. 保存映射关系
-        chatFiles.put(chatId, filename);
-
-        // 3. 将 chatId 和文件名保存到聊天历史记录
-        chatHistoryRepository.save("pdf", chatId, filename);
-        log.info("Chat history recorded for chatId: {}, filename: {}", chatId, filename);
-
-        // 4. 写入向量库
-        writeToVectorStore(resource, chatId);
-        return true;
     }
 
     @Override
     public Resource getFile(String chatId) {
-        String filename = chatFiles.getProperty(chatId);
-        if (filename == null) {
-            log.warn("No file found for chatId: {}", chatId);
+        String fileUrl = getFileUrl(chatId);
+        if (fileUrl == null || fileUrl.isEmpty()) {
+            log.warn("No file URL found for chatId: {}", chatId);
             return null;
         }
-        Resource resource = new FileSystemResource(filename);
-        if (!resource.exists()) {
-            log.warn("File not found: {}", filename);
+
+        try {
+            // 从 OSS 下载文件内容
+            URL url = new URL(fileUrl);
+            try (InputStream inputStream = url.openStream()) {
+                byte[] bytes = inputStream.readAllBytes();
+                String fileName = getFileName(chatId);
+                return new ByteArrayResource(bytes) {
+                    @Override
+                    public String getFilename() {
+                        return fileName != null ? fileName : "document.pdf";
+                    }
+                };
+            }
+        } catch (Exception e) {
+            log.error("从 OSS 下载文件失败: chatId={}", chatId, e);
             return null;
         }
-        return resource;
+    }
+
+    @Override
+    public String getFileUrl(String chatId) {
+        FileMapper fileMapper = getFileMapper(chatId);
+        return fileMapper != null ? fileMapper.getUrl() : null;
+    }
+
+    @Override
+    public String getTitle(String chatId) {
+        FileMapper fileMapper = getFileMapper(chatId);
+        return fileMapper != null ? fileMapper.getTitle() : null;
+    }
+
+    @Override
+    public String getFileName(String chatId) {
+        FileMapper fileMapper = getFileMapper(chatId);
+        return fileMapper != null ? fileMapper.getFileName() : null;
+    }
+
+    @Override
+    public void updateFileInfo(String chatId, String title, String fileName, String url) {
+        // 通过 chatId 查询已有记录
+        FileMapper existing = fileMapperMapper.selectByChatId(chatId);
+
+        if (existing != null) {
+            existing.setTitle(title);
+            existing.setFileName(fileName);
+            existing.setUrl(url);
+            fileMapperMapper.updateById(existing);
+            log.info("更新文件映射信息: chatId={}", chatId);
+        }
+    }
+
+    @Override
+    public FileMapper getFileMapper(String chatId) {
+        return fileMapperMapper.selectByChatId(chatId);
     }
 
     /**
-     * 初始化：从磁盘恢复持久化的数据
-     * 由于选择了基于内存的 SimpleVectorStore，重启会丢失向量数据
-     * 所以这里将 PDF 文件与 chatId 的对应关系、VectorStore 都持久化到磁盘
+     * 初始化：从向量存储文件恢复向量数据
+     * PDF 文件与会话的映射关系从 file_mapper 数据库表获取
      */
     @PostConstruct
     private void init() {
-        // 1. 加载会话-文件映射关系
-        FileSystemResource pdfResource = new FileSystemResource("chat-pdf.properties");
-        if (pdfResource.exists()) {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(pdfResource.getInputStream(), StandardCharsets.UTF_8))) {
-                chatFiles.load(reader);
-                log.info("Loaded {} chat-file mappings", chatFiles.size());
-            } catch (IOException e) {
-                log.warn("Failed to load chat-pdf.properties", e);
+        // 加载向量存储数据（持久化到本地文件不变）
+        if (vectorStore instanceof SimpleVectorStore simpleVectorStore) {
+            FileSystemResource vectorResource = new FileSystemResource(VECTOR_STORE_FILE);
+            if (vectorResource.exists()) {
+                try {
+                    simpleVectorStore.load(vectorResource);
+                    log.info("向量存储数据已从 {} 恢复", VECTOR_STORE_FILE);
+                } catch (Exception e) {
+                    log.warn("加载向量存储失败，将从空状态开始", e);
+                }
             }
-        }
-
-        // 2. 加载向量存储数据
-        FileSystemResource vectorResource = new FileSystemResource("chat-pdf.json");
-        if (vectorResource.exists()) {
-            try {
-                SimpleVectorStore simpleVectorStore = (SimpleVectorStore) vectorStore;
-                simpleVectorStore.load(vectorResource);
-                log.info("Vector store loaded from chat-pdf.json");
-            } catch (Exception e) {
-                log.warn("Failed to load vector store", e);
-            }
-        }
-
-        // 3. 从 chat-pdf.properties 中恢复 chatHistory
-        // 确保历史记录与文件映射保持一致
-        if (!chatFiles.isEmpty()) {
-            chatFiles.forEach((key, value) -> {
-                String chatId = String.valueOf(key);
-                String fileName = String.valueOf(value);
-                chatHistoryRepository.save("pdf", chatId, fileName);
-                log.debug("Restored chat history: {} -> {}", chatId, fileName);
-            });
-            log.info("Chat history restored from chat-pdf.properties, count: {}", chatFiles.size());
-        }
-    }
-
-    /**
-     * 销毁前持久化数据到磁盘
-     */
-    @PreDestroy
-    private void persistent() {
-        try {
-            // 1. 保存会话-文件映射关系
-            chatFiles.store(new FileWriter("chat-pdf.properties"), "RAG Practice Chat Files Mapping - " + LocalDateTime.now());
-
-            // 2. 保存向量存储数据
-            if (vectorStore instanceof SimpleVectorStore simpleVectorStore) {
-                simpleVectorStore.save(new File("chat-pdf.json"));
-                log.info("Vector store persisted to chat-pdf.json");
-            }
-            log.info("All data persisted successfully");
-        } catch (IOException e) {
-            log.error("Failed to persist data", e);
-            throw new RuntimeException("数据持久化失败", e);
         }
     }
 
@@ -193,9 +205,26 @@ public class FileServiceImpl implements IFileService {
             vectorStore.add(documents);
             log.info("Added {} documents to vector store for chatId: {}", documents.size(), chatId);
 
+            // 5. 将向量数据持久化到文件（保持不变）
+            persistVectorStore();
+
         } catch (Exception e) {
             log.error("Failed to write PDF to vector store", e);
             throw new RuntimeException("PDF 向量存储失败", e);
+        }
+    }
+
+    /**
+     * 将向量数据持久化到本地文件
+     */
+    private void persistVectorStore() {
+        if (vectorStore instanceof SimpleVectorStore simpleVectorStore) {
+            try {
+                simpleVectorStore.save(new File(VECTOR_STORE_FILE));
+                log.info("向量数据已持久化到 {}", VECTOR_STORE_FILE);
+            } catch (Exception e) {
+                log.error("持久化向量数据失败", e);
+            }
         }
     }
 }

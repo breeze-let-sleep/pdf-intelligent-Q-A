@@ -33,8 +33,13 @@ public class SpringAIConfiguration {
     /**
      * 配置 PDF 专用聊天客户端
      * 包含向量检索（QuestionAnswerAdvisor）和对话记忆（MessageChatMemoryAdvisor）
+     *
+     * 注意：defaultAdvisors 中配置的顾问会在每次请求时自动执行。
+     * 在 PdfController.generateFlux() 中，通过 .advisors(spec -> spec.param(...))
+     * 可以传递动态参数（如 CONVERSATION_ID、FILTER_EXPRESSION）给这些顾问，
+     * 而无需重复添加顾问实例。重复添加会导致 "No StreamAdvisors available to execute" 错误。
      */
-    @Bean
+    @Bean("pdfChatClient")
     public ChatClient pdfChatClient(
             DeepSeekChatModel model,
             ChatMemory chatMemory,
@@ -44,8 +49,10 @@ public class SpringAIConfiguration {
                         // 日志顾问，便于调试 RAG 检索内容
                         SimpleLoggerAdvisor.builder().build(),
                         // 对话记忆顾问，支持多会话
+                        // 注意：此顾问需要 CONVERSATION_ID 参数来识别不同会话
                         MessageChatMemoryAdvisor.builder(chatMemory).build(),
                         // RAG 核心：向量检索顾问
+                        // 注意：此顾问支持 FILTER_EXPRESSION 参数来过滤特定会话的文档
                         QuestionAnswerAdvisor
                                 .builder(vectorStore)
                                 .searchRequest(
@@ -55,6 +62,24 @@ public class SpringAIConfiguration {
                                                 .build()
                                 ).build()
                 )
+                .build();
+    }
+
+    /**
+     * 配置聊天客户端
+     * 包含对话记忆（MessageChatMemoryAdvisor）
+     */
+    @Bean("chatClient")
+    public ChatClient ChatClient(
+            DeepSeekChatModel model,
+            ChatMemory chatMemory) {
+        return ChatClient.builder(model)
+                .defaultAdvisors(
+                        // 日志顾问，便于调试 RAG 检索内容
+                        SimpleLoggerAdvisor.builder().build(),
+                        // 对话记忆顾问，支持多会话
+                        // 注意：此顾问需要 CONVERSATION_ID 参数来识别不同会话
+                        MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
     }
 }
